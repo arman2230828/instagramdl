@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Reels Downloader | InstaDL</title>
+    <meta name="description" content="Download Instagram Reels quickly and securely in HD without watermarks.">
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://instadl.vercel.app/">
+    <meta property="og:title" content="Instagram Reels Downloader | InstaDL">
+    <meta property="og:description" content="Download Instagram Reels quickly and securely in HD without watermarks.">
+    <meta property="og:image" content="https://instadl.vercel.app/assets/og-image.png">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://instadl.vercel.app/">
+    <meta property="twitter:title" content="Instagram Reels Downloader | InstaDL">
+    <meta property="twitter:description" content="Download Instagram Reels quickly and securely in HD without watermarks.">
+    <meta property="twitter:image" content="https://instadl.vercel.app/assets/og-image.png">
+
+    <!-- Canonical URL -->
+    <link rel="canonical" href="https://instadl.vercel.app/">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="/css/style.css">
+    
+    <!-- JSON-LD -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "InstaDL",
+      "url": "https://instadl.vercel.app"
+    }
+    </script>
+</head>
+<body>
+    <!-- Top Ad Placeholder (728x90 desktop / 320x100 mobile) -->
+    <div class="ad-container ad-top">
+        <div class="ad-placeholder">Ad: Top Banner (728x90)</div>
+    </div>
+
+    <!-- Sticky Navbar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="/" class="logo">Insta<span class="highlight">DL</span></a>
+            <ul class="nav-links">
+                <li><a href="/">Home</a></li>
+                <li><a href="/about">About</a></li>
+                <li><a href="/contact">Contact</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        
+<section class="hero">
+    <div class="hero-content">
+        <h1>Instagram Reels Downloader <span class="highlight">InstaDL</span></h1>
+        <p>Instantly process media URLs with zero hassle. Built for speed and reliability.</p>
+
+        <div class="url-input-container">
+
+            <form id="processForm" class="glass-form">
+                <input type="text" id="mediaUrl" placeholder="Paste Instagram Reel link here..." required>
+                <button type="submit" class="btn-primary" id="submitBtn">
+                    <span class="btn-text">Download</span>
+                    <span class="loader hidden"></span>
+                </button>
+            </form>
+        </div>
+    </div>
+</section>
+
+<!-- Middle Ad Placeholder (336x280) -->
+<div class="ad-container ad-middle">
+    <div class="ad-placeholder">Ad: Middle Rectangle (336x280)</div>
+</div>
+
+<section class="result-section hidden" id="resultSection">
+    <div class="glass-card success-card hidden" id="successCard">
+        <div class="card-header">
+            <svg class="icon success-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <h3>Process Completed</h3>
+        </div>
+        <div class="card-body">
+            <h4 id="mediaTitle">Media Title</h4>
+            <p class="timestamp" id="processTime"></p>
+
+            <div id="carouselContainer" class="carousel-container">
+                <!-- Javascript will inject Media Items here -->
+            </div>
+
+            <template id="mediaItemTemplate">
+                <div class="media-item">
+                    <div class="thumbnail-container">
+                        <div class="skeleton-loader"></div>
+                        <div class="thumbnail-fallback hidden">
+                            <svg class="icon fallback-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            <span class="fallback-text">No preview available</span>
+                        </div>
+                        <img src="" alt="Thumbnail" class="media-thumb hidden">
+                    </div>
+                    <a href="#" class="btn-primary full-width item-download-btn" download>Download</a>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <div class="glass-card error-card hidden" id="errorCard">
+        <div class="card-header">
+            <svg class="icon error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="15" y1="9" x2="9" y2="15"></line>
+                <line x1="9" y1="9" x2="15" y2="15"></line>
+            </svg>
+            <h3>Error</h3>
+        </div>
+        <div class="card-body">
+            <p id="errorMsg">Something went wrong.</p>
+        </div>
+        <div class="card-footer">
+            <button class="btn-secondary full-width" id="retryBtn">Try Again</button>
+        </div>
+    </div>
+</section>
+
+<!-- SEO & Instructions Section -->
+<section class="seo-section max-w-content prose">
+    <div class="glass-card seo-card">
+        <h2>How to Download Instagram Reels</h2>
+        <div class="steps-container">
+            <div class="step-box">
+                <span class="step-num">1</span>
+                <h4>Copy Link</h4>
+                <p>Open Instagram, find the reel you want, click the Share icon and select <strong>Copy Link</strong>.
+                </p>
+            </div>
+            <div class="step-box">
+                <span class="step-num">2</span>
+                <h4>Paste URL</h4>
+                <p>Return to InstaDL, paste the copied link into the input box above, and hit <strong>Download</strong>.
+                </p>
+            </div>
+            <div class="step-box">
+                <span class="step-num">3</span>
+                <h4>Save Video</h4>
+                <p>Wait for the preview to load, then click the <strong>Download Video</strong> button to save the MP4
+                    to your device.</p>
+            </div>
+        </div>
+
+        <h2>Best Instagram Reel Downloader Online</h2>
+        <p>Welcome to <strong>InstaDL</strong>, the fastest, most reliable, and 100% free <span class="highlight">Instagram Reel Downloader</span> on the web. Our powerful tool is specifically designed to help you <strong>download Instagram videos</strong>, <strong>save IG reels</strong>, and keep your favorite content offline in ultra-crisp High Definition (HD). Whether you are using a smartphone (iOS or Android), a tablet, or a desktop PC, our <strong>Instagram MP4 downloader</strong> works perfectly across all devices and browsers without requiring any additional software or app installation.</p>
+
+        <h3>The Ultimate Tool to Save Instagram Videos</h3>
+        <p>Instagram is packed with incredible content—from hilarious memes and viral dances to educational snippets and travel vlogs. Often, you find a Reel that you want to keep forever or share outside the platform. That's exactly where InstaDL steps in. With our <strong>Insta video saver</strong>, you can easily <strong>download IG videos online</strong> in MP4 format. It’s not just a downloader; it is a complete solution for anyone asking <em>"How do I save Instagram Reels to my camera roll?"</em> or <em>"How to download Instagram videos without watermark?"</em></p>
+        
+        <h3>Why Choose InstaDL for IG Video Downloads?</h3>
+        <ul>
+            <li><strong>High-Quality Downloads (HD & 4K):</strong> We ensure that every video you download retains its original quality. <strong>Save Insta videos online</strong> in the best available resolution, including 1080p HD, ensuring a crystal-clear viewing experience.</li>
+            <li><strong>Fast and Secure MP4 Downloader:</strong> We respect your privacy and security. Our <strong>Instagram video saver</strong> does not require login credentials. You don't need to provide your username or password. Simply paste the link, and you are good to go!</li>
+            <li><strong>No Watermark / Clean Video:</strong> Enjoy original, clean videos without any distracting or annoying logos overlapping the content.</li>
+            <li><strong>Completely Free & Unlimited:</strong> Download as many <strong>Instagram Reels</strong>, tutorials, and short clips as you want. There are zero restrictions, zero paywalls, and absolutely no hidden fees.</li>
+            <li><strong>Cross-Platform Compatibility:</strong> Whether you need an <strong>Instagram downloader for iPhone</strong>, Android, Mac, or Windows PC, InstaDL functions flawlessly on Safari, Chrome, Firefox, and Edge.</li>
+        </ul>
+
+        <h3>Advanced Features of Our Instagram Downloader</h3>
+        <p>We pride ourselves on offering a robust <strong>IG downloader</strong> that goes beyond basic functionality. Our backend architecture utilizes advanced extraction techniques to fetch media instantly, providing you with a direct <strong>MP4 download link</strong>. If you are looking for an <strong>Instagram story saver</strong> alternative or an <strong>IGTV downloader</strong>, our core engine is built to process standard Instagram Reel URLs seamlessly, ensuring you get the video file directly to your local storage.</p>
+
+        <h3>Frequently Asked Questions (FAQ)</h3>
+        <h4>Can I download Instagram Reels on my iPhone or Android?</h4>
+        <p>Absolutely! InstaDL is a fully responsive web application. You can use it as a <strong>mobile Instagram reel downloader</strong> directly from your device's browser. iOS users can save directly to their Files or Photos app, while Android users will find the MP4 files instantly in their Downloads folder.</p>
+        
+        <h4>Do I need to install an app or extension to download Instagram videos?</h4>
+        <p>No, you do not need to install any third-party applications, APKs, or browser extensions. Our <strong>Insta saver tool</strong> is 100% web-based, saving you storage space and keeping your device safe from malware.</p>
+
+        <h4>Are there any limits on how many IG Reels I can download?</h4>
+        <p>No limits at all. You can use our <strong>Instagram reel downloader online free</strong> tool to save 10, 100, or 1000 videos. It is built to handle heavy traffic and provide unlimited downloads to all users.</p>
+        
+        <h4>Is it legal to download Instagram videos?</h4>
+        <p>Yes, it is entirely legal to download videos for your personal, offline use. However, you should respect copyright laws. Do not re-upload, distribute, or use someone else's copyrighted content for commercial purposes without securing explicit permission from the original creator.</p>
+        
+        <h4>Why is InstaDL better than other IG downloaders?</h4>
+        <p>Unlike many other platforms loaded with pop-ups and fake buttons, InstaDL offers a premium, ad-friendly, and safe environment. Our glassmorphism UI guarantees an excellent user experience, making us the top choice for an <strong>Instagram link downloader</strong>.</p>
+    </div>
+</section>
+
+<!-- Toast Container -->
+<div id="toastContainer" class="toast-container"></div>
+
+
+    </main>
+
+    <!-- Before Footer Ad Placeholder (728x90) -->
+    <div class="ad-container ad-footer">
+        <div class="ad-placeholder">Ad: Before Footer (728x90)</div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <p>&copy; 2026 InstaDL. All rights reserved.</p>
+            <ul class="footer-links">
+                <li><a href="/privacy-policy">Privacy Policy</a></li>
+                <li><a href="/terms">Terms of Service</a></li>
+                <li><a href="/dmca">DMCA</a></li>
+            </ul>
+        </div>
+    </footer>
+
+    <!-- JS -->
+    <script src="/js/config.js"></script>
+    <script src="/js/main.js"></script>
+</body>
+</html>
