@@ -1,15 +1,10 @@
 import logging
 import asyncio
-import random
 import os
 import re
-import json
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple, List
-import yt_dlp
 import instaloader
-import httpx
-from bs4 import BeautifulSoup
 from cachetools import TTLCache
 from app.models.schemas import ProcessResponse, MediaItem
 
@@ -17,15 +12,6 @@ logger = logging.getLogger(__name__)
 
 # Cache for metadata (10 minutes)
 _cache = TTLCache(maxsize=100, ttl=600)
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.2; rv:109.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1.2 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
-]
 
 def get_cookie_path() -> Optional[str]:
     """Finds cookies.txt in multiple possible locations."""
@@ -43,7 +29,7 @@ def get_cookie_path() -> Optional[str]:
     return None
 
 def parse_cookies_txt(cookie_path: Optional[str]) -> dict:
-    """Parses a Netscape cookies.txt file into a dictionary for httpx."""
+    """Parses a Netscape cookies.txt file into a dictionary."""
     cookies = {}
     if not cookie_path or not os.path.exists(cookie_path):
         return cookies
@@ -76,69 +62,6 @@ class MediaExtractor:
     """Base class for extractors."""
     async def extract(self, url: str) -> dict:
         raise NotImplementedError
-
-class DdInstagramExtractor(MediaExtractor):
-    """Extraction using ddinstagram.com (cookie-free, login-free proxy for embeds)."""
-    async def extract(self, url: str) -> dict:
-        # Replace the instagram domain with ddinstagram.com, preserving the path (/reel/, /p/, etc.)
-        dd_url = url.replace("www.instagram.com", "ddinstagram.com").replace("instagram.com", "ddinstagram.com")
-        
-        logger.info(f"DdInstagramExtractor: Fetching proxy page: {dd_url}")
-        headers = {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-        }
-        
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
-            resp = await client.get(dd_url, headers=headers)
-            resp.raise_for_status()
-            
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # ddinstagram puts the direct video URL in og:video or twitter:player
-            og_video = soup.find('meta', property='og:video') or soup.find('meta', name='twitter:player:stream') or soup.find('meta', name='twitter:player')
-            og_image = soup.find('meta', property='og:image') or soup.find('meta', name='twitter:image')
-            og_title = soup.find('meta', property='og:title') or soup.find('meta', name='twitter:title')
-            og_description = soup.find('meta', property='og:description') or soup.find('meta', name='twitter:description')
-            
-            title = og_title.get('content') if og_title else 'Instagram Media'
-            desc = og_description.get('content', '') if og_description else ''
-            
-            # Try to parse like count from description (e.g. "❤️ 12,345 | 💬 123")
-            like_count = None
-            likes_match = re.search(r'❤️\s*([\d,]+)', desc)
-            if likes_match:
-                try:
-                    like_count = int(likes_match.group(1).replace(',', ''))
-                except:
-                    pass
-            
-            if og_video and og_video.get('content'):
-                video_url = clean_url(og_video.get('content'))
-                thumbnail_url = clean_url(og_image.get('content')) if og_image else ""
-                logger.info(f"DdInstagramExtractor: Successfully found video: {video_url}")
-                return {
-                    'title': title,
-                    'thumbnail': thumbnail_url,
-                    'url': video_url,
-                    'ext': 'mp4',
-                    'vcodec': 'h264',
-                    'like_count': like_count
-                }
-            elif og_image and og_image.get('content'):
-                image_url = clean_url(og_image.get('content'))
-                logger.info(f"DdInstagramExtractor: Successfully found image: {image_url}")
-                return {
-                    'title': title,
-                    'thumbnail': image_url,
-                    'url': image_url,
-                    'ext': 'jpg',
-                    'vcodec': 'none',
-                    'like_count': like_count
-                }
-                
-            raise Exception("DdInstagramExtractor: No media found in ddinstagram HTML.")
 
 class InstaloaderExtractor(MediaExtractor):
     """Extraction using the official instaloader library (supports cookies.txt)."""
@@ -211,206 +134,9 @@ class InstaloaderExtractor(MediaExtractor):
                     
         return await asyncio.to_thread(_fetch)
 
-class YtDlpExtractor(MediaExtractor):
-    """Extraction using yt-dlp."""
-    def _extract_sync(self, url: str) -> dict:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-            'noplaylist': True,
-            'socket_timeout': 15,
-            'format': 'best',
-            'retries': 3,
-            'extractor_retries': 3,
-            'http_headers': {
-                'User-Agent': random.choice(USER_AGENTS),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-            }
-        }
-        
-        cookie_path = get_cookie_path()
-        if cookie_path:
-            ydl_opts['cookiefile'] = cookie_path
-            
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return {
-                'title': info.get('title') or info.get('description') or 'Instagram Media',
-                'thumbnail': info.get('thumbnail') or '',
-                'url': info.get('url'),
-                'ext': info.get('ext') or 'mp4',
-                'vcodec': info.get('vcodec') or 'h264',
-                'like_count': info.get('like_count')
-            }
-            
-    async def extract(self, url: str) -> dict:
-        return await asyncio.to_thread(self._extract_sync, url)
-
-class GraphQLScraper(MediaExtractor):
-    """Extraction using Instagram's ?__a=1&__d=dis endpoint."""
-    async def extract(self, url: str) -> dict:
-        base_url = url.split('?')[0].rstrip('/') + '/'
-        api_url = f"{base_url}?__a=1&__d=dis"
-        
-        headers = {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "X-IG-App-ID": "936619743392459", 
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-        }
-        
-        cookie_path = get_cookie_path()
-        cookies = parse_cookies_txt(cookie_path)
-        
-        async with httpx.AsyncClient(cookies=cookies, follow_redirects=True, timeout=15.0) as client:
-            resp = await client.get(api_url, headers=headers)
-            resp.raise_for_status()
-            
-            try:
-                data = resp.json()
-            except ValueError:
-                raise Exception("GraphQL Scraper failed: response is not JSON")
-            
-            if 'items' in data and len(data['items']) > 0:
-                item = data['items'][0]
-                like_count = item.get('like_count')
-                
-                if 'carousel_media' in item:
-                    entries = []
-                    for sub_item in item['carousel_media']:
-                        is_vid = 'video_versions' in sub_item
-                        entry_url = clean_url(sub_item['video_versions'][0]['url'] if is_vid else sub_item['image_versions2']['candidates'][0]['url'])
-                        entries.append({
-                            'url': entry_url,
-                            'thumbnail': clean_url(sub_item['image_versions2']['candidates'][0]['url']),
-                            'vcodec': 'h264' if is_vid else 'none',
-                            'ext': 'mp4' if is_vid else 'jpg'
-                        })
-                    return {
-                        'title': item.get('caption', {}).get('text', 'Instagram Media') if item.get('caption') else 'Instagram Media',
-                        'entries': entries,
-                        'like_count': like_count
-                    }
-                else:
-                    is_vid = 'video_versions' in item
-                    media_url = clean_url(item['video_versions'][0]['url'] if is_vid else item['image_versions2']['candidates'][0]['url'])
-                    return {
-                        'title': item.get('caption', {}).get('text', 'Instagram Media') if item.get('caption') else 'Instagram Media',
-                        'thumbnail': clean_url(item['image_versions2']['candidates'][0]['url']),
-                        'url': media_url,
-                        'ext': 'mp4' if is_vid else 'jpg',
-                        'vcodec': 'h264' if is_vid else 'none',
-                        'like_count': like_count
-                    }
-            
-            elif 'graphql' in data and 'shortcode_media' in data['graphql']:
-                media = data['graphql']['shortcode_media']
-                like_count = media.get('edge_liked_by', {}).get('count') or media.get('edge_media_preview_like', {}).get('count')
-                
-                if 'edge_sidecar_to_children' in media:
-                    entries = []
-                    for edge in media['edge_sidecar_to_children']['edges']:
-                        node = edge['node']
-                        entry_url = clean_url(node.get('video_url') or node.get('display_url'))
-                        entries.append({
-                            'url': entry_url,
-                            'thumbnail': clean_url(node.get('display_url')),
-                            'vcodec': 'h264' if node.get('is_video') else 'none',
-                            'ext': 'mp4' if node.get('is_video') else 'jpg'
-                        })
-                    return {
-                        'title': media.get('title') or 'Instagram Media',
-                        'entries': entries,
-                        'like_count': like_count
-                    }
-                else:
-                    vid_url = media.get('video_url')
-                    if vid_url:
-                        return {
-                            'title': media.get('title') or 'Instagram Media',
-                            'thumbnail': clean_url(media.get('display_url', '')),
-                            'url': clean_url(vid_url),
-                            'ext': 'mp4',
-                            'vcodec': 'h264',
-                            'like_count': like_count
-                        }
-                    else:
-                        return {
-                            'title': media.get('title') or 'Instagram Media',
-                            'thumbnail': clean_url(media.get('display_url', '')),
-                            'url': clean_url(media.get('display_url', '')),
-                            'ext': 'jpg',
-                            'vcodec': 'none',
-                            'like_count': like_count
-                        }
-            
-            raise Exception("GraphQL Scraper failed to find media in JSON structure.")
-
-class HtmlFallbackExtractor(MediaExtractor):
-    """Extraction using beautifulsoup4 and regex on the raw HTML."""
-    async def extract(self, url: str) -> dict:
-        headers = {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1"
-        }
-        
-        cookie_path = get_cookie_path()
-        cookies = parse_cookies_txt(cookie_path)
-        
-        async with httpx.AsyncClient(cookies=cookies, follow_redirects=True, timeout=15.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            html = resp.text
-            
-            soup = BeautifulSoup(html, 'html.parser')
-            og_video = soup.find('meta', property='og:video')
-            og_image = soup.find('meta', property='og:image')
-            og_title = soup.find('meta', property='og:title')
-            
-            if og_video and og_video.get('content'):
-                return {
-                    'title': og_title.get('content') if og_title else 'Instagram Media',
-                    'thumbnail': clean_url(og_image.get('content') if og_image else ''),
-                    'url': clean_url(og_video.get('content')),
-                    'ext': 'mp4',
-                    'vcodec': 'h264'
-                }
-            
-            json_pattern = re.compile(r'window\._sharedData\s*=\s*({.+?});</script>')
-            match = json_pattern.search(html)
-            if match:
-                data = json.loads(match.group(1))
-                try:
-                    post_data = data['entry_data']['PostPage'][0]['graphql']['shortcode_media']
-                    vid_url = post_data.get('video_url')
-                    if vid_url:
-                        return {
-                            'title': 'Instagram Media',
-                            'thumbnail': clean_url(post_data.get('display_url', '')),
-                            'url': clean_url(vid_url),
-                            'ext': 'mp4',
-                            'vcodec': 'h264'
-                        }
-                except KeyError:
-                    pass
-            
-            raise Exception("HTML Fallback Extractor failed to find media.")
-
 class MediaService:
     """
-    Service for media processing with robust fallback mechanisms.
+    Service for media processing using Instaloader.
     """
     
     @staticmethod
@@ -465,45 +191,13 @@ class MediaService:
             logger.info(f"Cache hit for {url}")
             return _cache[url]
             
-        extractors = [
-            DdInstagramExtractor(),
-            InstaloaderExtractor(),
-            YtDlpExtractor(),
-            GraphQLScraper(),
-            HtmlFallbackExtractor()
-        ]
+        extractor = InstaloaderExtractor()
         
-        info_dict = None
-        last_error = None
-        
-        for i, extractor in enumerate(extractors):
-            extractor_name = extractor.__class__.__name__
-            logger.info(f"Attempt {i+1}: Trying {extractor_name} for {url}")
-            try:
-                info_dict = await extractor.extract(url)
-                if info_dict:
-                    logger.info(f"Success with {extractor_name}")
-                    break
-            except Exception as e:
-                logger.warning(f"{extractor_name} failed: {e}")
-                last_error = e
-                continue
-                
-        if not info_dict:
-            logger.error(f"All extraction methods failed for {url}. Last error: {last_error}")
-            
-            err_msg = str(last_error).lower()
-            user_msg = "Failed to process. Make sure the profile is public and the URL is correct."
-            
-            if "empty media response" in err_msg or "not exists" in err_msg or "403" in err_msg or "blocked" in err_msg:
-                user_msg = "Instagram blocked the request or the account is private. Please ensure the link is correct and the account is public."
-                
-            return ProcessResponse(
-                success=False,
-                message=user_msg
-            )
-            
         try:
+            info_dict = await extractor.extract(url)
+            if not info_dict:
+                raise Exception("No media extracted by Instaloader")
+                
             media_title, thumbnail_url, action_url, items = MediaService._normalize_info(info_dict)
             timestamp_str = datetime.now(timezone.utc).isoformat()
             
@@ -522,8 +216,14 @@ class MediaService:
             return response
             
         except Exception as e:
-            logger.error(f"Error normalizing extracted data: {e}")
+            logger.error(f"Instaloader extraction failed: {e}")
+            err_msg = str(e).lower()
+            user_msg = "Failed to process. Make sure the profile is public and the URL is correct."
+            
+            if "login" in err_msg or "403" in err_msg or "connection" in err_msg:
+                user_msg = "Instagram blocked the request. Please upload a valid cookies.txt file to the project root to authenticate."
+                
             return ProcessResponse(
                 success=False,
-                message="An unexpected error occurred while parsing the media data."
+                message=user_msg
             )
