@@ -35,8 +35,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 origins = [
     "https://instadld-zeav.vercel.app",
+    "https://fastapk.in",
+    "https://www.fastapk.in",
     "http://localhost:3000",
-    "http://localhost:5173",
 ]
 
 # Agar custom domain ho to isko bhi add kar dena
