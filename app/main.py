@@ -61,25 +61,34 @@ async def add_security_headers(request: Request, call_next):
 
     return response
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+# Mount static files and Jinja2 templates using absolute paths
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(BASE_DIR, "static")
+templates_dir = os.path.join(BASE_DIR, "templates")
 
-# Jinja2 Templates
-templates = Jinja2Templates(directory="app/templates")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+templates = Jinja2Templates(directory=templates_dir)
 
 app.include_router(api.router, prefix="/api", tags=["API"])
 
 @app.get("/")
 async def serve_home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 @app.get("/{page}")
 async def serve_page(request: Request, page: str):
-    valid_pages = ["about", "privacy", "terms", "contact", "dmca"]
+    valid_pages = {
+        "about": "about.html",
+        "privacy": "privacy.html",
+        "privacy-policy": "privacy.html",
+        "terms": "terms.html",
+        "contact": "contact.html",
+        "dmca": "dmca.html"
+    }
     if page in valid_pages:
-        return templates.TemplateResponse(f"{page}.html", {"request": request})
+        return templates.TemplateResponse(request=request, name=valid_pages[page])
     
-    # If not found, return 404 or index
+    # If not found, return 404
     raise HTTPException(status_code=404, detail="Page not found")
 
 @app.exception_handler(Exception)
