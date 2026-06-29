@@ -1,72 +1,278 @@
 import logging
 import asyncio
+import random
+import os
+import re
+import json
 from datetime import datetime, timezone
+from typing import Dict, Optional, Tuple, List
 import yt_dlp
+import httpx
+from bs4 import BeautifulSoup
+from cachetools import TTLCache
 from app.models.schemas import ProcessResponse, MediaItem
 
 logger = logging.getLogger(__name__)
 
-class MediaService:
-    """
-    Service for media processing using yt-dlp to support multiple platforms.
-    """
+# Cache for metadata (10 minutes)
+_cache = TTLCache(maxsize=100, ttl=600)
 
-    @staticmethod
-    def _extract_info_sync(url: str) -> dict:
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.2; rv:109.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1.2 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
+]
+
+class MediaExtractor:
+    """Base class for extractors."""
+    async def extract(self, url: str) -> dict:
+        raise NotImplementedError
+
+class YtDlpExtractor(MediaExtractor):
+    """Extraction using yt-dlp."""
+    def _extract_sync(self, url: str) -> dict:
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
             'noplaylist': True,
             'extract_flat': 'in_playlist',
-            'socket_timeout': 10,
-            # Use best to get either video or image depending on what's available
-            'format': 'best'
+            'socket_timeout': 15,
+            'format': 'best',
+            'http_headers': {
+                'User-Agent': random.choice(USER_AGENTS)
+            }
         }
+        
+        # Check for cookies.txt
+        cookie_path = os.path.join(os.getcwd(), 'backend', 'cookies.txt')
+        if not os.path.exists(cookie_path):
+            cookie_path = os.path.join(os.getcwd(), 'cookies.txt')
+            
+        if os.path.exists(cookie_path):
+            ydl_opts['cookiefile'] = cookie_path
+            
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
+            
+    async def extract(self, url: str) -> dict:
+        return await asyncio.to_thread(self._extract_sync, url)
+
+class HtmlFallbackExtractor(MediaExtractor):
+    """Extraction using beautifulsoup4 and regex on the raw HTML."""
+    async def extract(self, url: str) -> dict:
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1"
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
+            
+            # Try to parse Open Graph tags
+            soup = BeautifulSoup(html, 'html.parser')
+            og_video = soup.find('meta', property='og:video')
+            og_image = soup.find('meta', property='og:image')
+            og_title = soup.find('meta', property='og:title')
+            
+            if og_video and og_video.get('content'):
+                return {
+                    'title': og_title.get('content') if og_title else 'Instagram Media',
+                    'thumbnail': og_image.get('content') if og_image else '',
+                    'url': og_video.get('content'),
+                    'ext': 'mp4',
+                    'vcodec': 'h264'
+                }
+            
+            # If no OG video, look for raw JSON blobs
+            json_pattern = re.compile(r'window\._sharedData\s*=\s*({.+?});</script>')
+            match = json_pattern.search(html)
+            if match:
+                data = json.loads(match.group(1))
+                try:
+                    post_data = data['entry_data']['PostPage'][0]['graphql']['shortcode_media']
+                    vid_url = post_data.get('video_url')
+                    if vid_url:
+                        return {
+                            'title': 'Instagram Media',
+                            'thumbnail': post_data.get('display_url', ''),
+                            'url': vid_url,
+                            'ext': 'mp4',
+                            'vcodec': 'h264'
+                        }
+                except KeyError:
+                    pass
+            
+            raise Exception("HTML Fallback Extractor failed to find media.")
+
+class GraphQLScraper(MediaExtractor):
+    """Extraction using Instagram's ?__a=1&__d=dis endpoint."""
+    async def extract(self, url: str) -> dict:
+        if not url.endswith('/'):
+            url += '/'
+        api_url = f"{url}?__a=1&__d=dis"
+        
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-IG-App-ID": "936619743392459", 
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            resp = await client.get(api_url, headers=headers)
+            resp.raise_for_status()
+            
+            try:
+                data = resp.json()
+            except ValueError:
+                raise Exception("GraphQL Scraper failed: response is not JSON")
+                
+            if 'graphql' in data and 'shortcode_media' in data['graphql']:
+                media = data['graphql']['shortcode_media']
+                
+                # Check if it's a carousel (multiple images/videos)
+                if 'edge_sidecar_to_children' in media:
+                    entries = []
+                    for edge in media['edge_sidecar_to_children']['edges']:
+                        node = edge['node']
+                        entry_url = node.get('video_url') or node.get('display_url')
+                        entries.append({
+                            'url': entry_url,
+                            'thumbnail': node.get('display_url'),
+                            'vcodec': 'h264' if node.get('is_video') else 'none',
+                            'ext': 'mp4' if node.get('is_video') else 'jpg'
+                        })
+                    return {
+                        'title': media.get('title', 'Instagram Media'),
+                        'entries': entries
+                    }
+                else:
+                    vid_url = media.get('video_url')
+                    if vid_url:
+                        return {
+                            'title': media.get('title', 'Instagram Media'),
+                            'thumbnail': media.get('display_url', ''),
+                            'url': vid_url,
+                            'ext': 'mp4',
+                            'vcodec': 'h264'
+                        }
+                    else:
+                        # Image only
+                        return {
+                            'title': media.get('title', 'Instagram Media'),
+                            'thumbnail': media.get('display_url', ''),
+                            'url': media.get('display_url', ''),
+                            'ext': 'jpg',
+                            'vcodec': 'none'
+                        }
+            
+            raise Exception("GraphQL Scraper failed to find media in JSON.")
+
+class MediaService:
+    """
+    Service for media processing with robust fallback mechanisms.
+    """
+    
+    @staticmethod
+    def _normalize_info(info_dict: dict) -> Tuple[str, str, str, List[MediaItem]]:
+        """Extracts standard fields from a raw info dictionary (either from yt-dlp or custom scrapers)."""
+        items = []
+        media_title = info_dict.get('title', 'Instagram Media')
+        thumbnail_url = info_dict.get('thumbnail', '')
+        action_url = info_dict.get('url')
+        
+        # If the post is a carousel/playlist, extract all entries
+        if 'entries' in info_dict and info_dict['entries']:
+            for entry in info_dict['entries']:
+                entry_thumb = entry.get('thumbnail', '')
+                entry_url = entry.get('url')
+                if not entry_url and 'formats' in entry and entry['formats']:
+                    entry_url = entry['formats'][-1].get('url', '#')
+                
+                is_vid = entry.get('vcodec') != 'none' or (entry.get('ext') in ['mp4', 'webm'])
+                items.append(MediaItem(thumbnail_url=entry_thumb, action_url=entry_url, is_video=is_vid))
+                
+            if items:
+                thumbnail_url = thumbnail_url or items[0].thumbnail_url
+                action_url = action_url or items[0].action_url
+        else:
+            if not action_url and 'formats' in info_dict and info_dict['formats']:
+                action_url = info_dict['formats'][-1].get('url', '#')
+            elif not action_url:
+                action_url = '#'
+            is_vid = info_dict.get('vcodec') != 'none' or (info_dict.get('ext') in ['mp4', 'webm'])
+            items.append(MediaItem(thumbnail_url=thumbnail_url, action_url=action_url, is_video=is_vid))
+            
+        return media_title, thumbnail_url, action_url, items
 
     @staticmethod
     async def process_url(url: str, mode: str = "reel") -> ProcessResponse:
         logger.info(f"Processing URL {url} in mode: {mode}")
         
-        try:
-            items = []
+        # Check cache
+        if url in _cache:
+            logger.info(f"Cache hit for {url}")
+            return _cache[url]
             
-            # Use yt-dlp to extract data
-            info_dict = await asyncio.to_thread(MediaService._extract_info_sync, url)
-            
-            media_title = info_dict.get('title', 'Unknown Title')
-            thumbnail_url = info_dict.get('thumbnail', '')
-            action_url = info_dict.get('url')
-            
-            # If the post is a carousel/playlist, extract all entries
-            if 'entries' in info_dict and info_dict['entries']:
-                for entry in info_dict['entries']:
-                    entry_thumb = entry.get('thumbnail', '')
-                    entry_url = entry.get('url')
-                    if not entry_url and 'formats' in entry and entry['formats']:
-                        entry_url = entry['formats'][-1].get('url', '#')
-                    
-                    # Determine if it's a video based on vcodec or ext
-                    is_vid = entry.get('vcodec') != 'none' or (entry.get('ext') in ['mp4', 'webm'])
-                    items.append(MediaItem(thumbnail_url=entry_thumb, action_url=entry_url, is_video=is_vid))
-                    
-                # Set the main thumbnail and url to the first item for fallback compatibility
-                if items:
-                    thumbnail_url = thumbnail_url or items[0].thumbnail_url
-                    action_url = action_url or items[0].action_url
-            else:
-                if not action_url and 'formats' in info_dict and info_dict['formats']:
-                    action_url = info_dict['formats'][-1].get('url', '#')
-                elif not action_url:
-                    action_url = '#'
-                is_vid = info_dict.get('vcodec') != 'none' or (info_dict.get('ext') in ['mp4', 'webm'])
-                items.append(MediaItem(thumbnail_url=thumbnail_url, action_url=action_url, is_video=is_vid))
+        # Define extraction strategies in order of preference
+        extractors = [
+            YtDlpExtractor(),
+            GraphQLScraper(),
+            HtmlFallbackExtractor()
+        ]
+        
+        info_dict = None
+        last_error = None
+        
+        for i, extractor in enumerate(extractors):
+            extractor_name = extractor.__class__.__name__
+            logger.info(f"Attempt {i+1}: Trying {extractor_name} for {url}")
+            try:
+                info_dict = await extractor.extract(url)
+                if info_dict:
+                    logger.info(f"Success with {extractor_name}")
+                    break
+            except Exception as e:
+                logger.warning(f"{extractor_name} failed: {e}")
+                last_error = e
+                continue
                 
-            timestamp_str = datetime.now(timezone.utc).isoformat()
+        if not info_dict:
+            logger.error(f"All extraction methods failed for {url}. Last error: {last_error}")
+            
+            # Map known errors to friendly messages
+            err_msg = str(last_error).lower()
+            user_msg = "Failed to process. Make sure the profile is public or the URL is correct."
+            
+            if "empty media response" in err_msg or "not exists" in err_msg or "403" in err_msg or "blocked" in err_msg:
+                user_msg = "Instagram blocked the request or the account is private. Please ensure the link is correct and the account is public."
                 
             return ProcessResponse(
+                success=False,
+                message=user_msg
+            )
+            
+        try:
+            media_title, thumbnail_url, action_url, items = MediaService._normalize_info(info_dict)
+            timestamp_str = datetime.now(timezone.utc).isoformat()
+            
+            response = ProcessResponse(
                 success=True,
                 message="Process completed successfully.",
                 media_title=media_title,
@@ -75,15 +281,15 @@ class MediaService:
                 items=items,
                 timestamp=timestamp_str
             )
-        except Exception as e:
-            err_msg = str(e).lower()
-            logger.error(f"Failed to process {mode} for {url}: {e}")
             
-            user_msg = "Failed to process. Make sure the profile is public or the URL is correct."
-            if "empty media response" in err_msg or "not exists" in err_msg or "403" in err_msg or "blocked" in err_msg:
-                user_msg = "Instagram blocked the request or the account is private. (Try again later, or your server IP is rate-limited)."
-                
+            # Save to cache
+            _cache[url] = response
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error normalizing extracted data: {e}")
             return ProcessResponse(
                 success=False,
-                message=user_msg
+                message="An unexpected error occurred while parsing the media data."
             )
