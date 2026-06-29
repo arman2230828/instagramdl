@@ -226,17 +226,14 @@ class InstagramEmbedScraper(MediaExtractor):
 class DdInstagramExtractor(MediaExtractor):
     """Extraction using ddinstagram.com (cookie-free, login-free proxy for embeds)."""
     async def extract(self, url: str) -> dict:
-        # Normalize and convert URL to ddinstagram.com
-        match = re.search(r'/(?:p|reel|tv)/([A-Za-z0-9_-]+)', url)
-        if not match:
-            raise Exception("Could not parse shortcode from URL")
-        shortcode = match.group(1)
-        dd_url = f"https://ddinstagram.com/images/{shortcode}/1"
+        # Replace the instagram domain with ddinstagram.com, preserving the path (/reel/, /p/, etc.)
+        dd_url = url.replace("www.instagram.com", "ddinstagram.com").replace("instagram.com", "ddinstagram.com")
         
         logger.info(f"DdInstagramExtractor: Fetching proxy page: {dd_url}")
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
         }
         
         async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
