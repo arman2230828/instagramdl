@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Request, HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from app.models.schemas import ProcessRequest, ProcessResponse
 from app.services.media_service import MediaService
 import logging
@@ -24,7 +24,10 @@ async def proxy_image(url: str):
         return Response(content=image_data, media_type=content_type)
     except Exception as e:
         logger.error(f"Failed to proxy image {url}: {e}")
-        raise HTTPException(status_code=404, detail="Image not found")
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "Image not found"}
+        )
 
 @router.get("/proxy-download")
 def proxy_download(url: str, title: str = "media", ext: str = "mp4"):
@@ -48,27 +51,63 @@ def proxy_download(url: str, title: str = "media", ext: str = "mp4"):
         "Content-Disposition": f'attachment; filename="{title}.{ext}"'
     }
     return StreamingResponse(stream_file(), headers=headers, media_type=content_type)
-@router.post("/process", response_model=ProcessResponse)
+
+@router.post("/process")
 async def process_media(request: Request, payload: ProcessRequest):
     """
     Endpoint to process a given media URL.
-    Rate limiting should ideally be applied here.
     """
-    limiter = request.app.state.limiter
-    # Rate limit: 10 requests per minute per IP
-    # (In slowapi, you usually decorate the route, but since it's dynamic here, we use the decorator format)
+    logger.info(f"POST /api/process - Received payload: {payload.dict()}")
     
+    url_str = str(payload.url).strip()
+    if not url_str:
+        logger.warning("POST /api/process - Validation failure: Empty URL provided")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "The Instagram URL cannot be empty.",
+                "reason": "validation_failure"
+            }
+        )
+        
+    if "instagram.com" not in url_str:
+        logger.warning(f"POST /api/process - Validation failure: Non-Instagram URL provided: {url_str}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "Only valid Instagram links (Reels, Posts, Videos) are supported.",
+                "reason": "unsupported_url"
+            }
+        )
+
     try:
-        response = await MediaService.process_url(str(payload.url), mode=payload.mode)
+        response = await MediaService.process_url(url_str, mode=payload.mode)
         if not response.success:
-            # We return a 400 for bad processing to trigger error card
-            raise HTTPException(status_code=400, detail=response.message)
+            logger.error(f"POST /api/process - Extraction failure for URL {url_str}. Message: {response.message}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": response.message,
+                    "reason": "extraction_failure"
+                }
+            )
+            
+        logger.info(f"POST /api/process - Successful extraction for URL {url_str}")
         return response
-    except HTTPException as e:
-        raise e
+        
     except Exception as e:
-        logger.error(f"Error processing URL: {e}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred during processing.")
+        logger.exception(f"POST /api/process - Unexpected internal error for URL {url_str}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": "An unexpected error occurred during processing.",
+                "reason": "internal_error"
+            }
+        )
 
 @router.get("/health")
 async def health_check():

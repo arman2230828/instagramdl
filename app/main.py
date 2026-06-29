@@ -91,6 +91,21 @@ async def serve_page(request: Request, page: str):
     # If not found, return 404
     raise HTTPException(status_code=404, detail="Page not found")
 
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error on {request.url}: {exc.errors()}")
+    return JSONResponse(
+        status_code=400,
+        content={
+            "success": False,
+            "message": "Invalid request payload. Please verify your input.",
+            "reason": "validation_failure",
+            "detail": exc.errors()
+        }
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception(exc)
