@@ -77,6 +77,69 @@ class MediaExtractor:
     async def extract(self, url: str) -> dict:
         raise NotImplementedError
 
+class DdInstagramExtractor(MediaExtractor):
+    """Extraction using ddinstagram.com (cookie-free, login-free proxy for embeds)."""
+    async def extract(self, url: str) -> dict:
+        # Replace the instagram domain with ddinstagram.com, preserving the path (/reel/, /p/, etc.)
+        dd_url = url.replace("www.instagram.com", "ddinstagram.com").replace("instagram.com", "ddinstagram.com")
+        
+        logger.info(f"DdInstagramExtractor: Fetching proxy page: {dd_url}")
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            resp = await client.get(dd_url, headers=headers)
+            resp.raise_for_status()
+            
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # ddinstagram puts the direct video URL in og:video or twitter:player
+            og_video = soup.find('meta', property='og:video') or soup.find('meta', name='twitter:player:stream') or soup.find('meta', name='twitter:player')
+            og_image = soup.find('meta', property='og:image') or soup.find('meta', name='twitter:image')
+            og_title = soup.find('meta', property='og:title') or soup.find('meta', name='twitter:title')
+            og_description = soup.find('meta', property='og:description') or soup.find('meta', name='twitter:description')
+            
+            title = og_title.get('content') if og_title else 'Instagram Media'
+            desc = og_description.get('content', '') if og_description else ''
+            
+            # Try to parse like count from description (e.g. "❤️ 12,345 | 💬 123")
+            like_count = None
+            likes_match = re.search(r'❤️\s*([\d,]+)', desc)
+            if likes_match:
+                try:
+                    like_count = int(likes_match.group(1).replace(',', ''))
+                except:
+                    pass
+            
+            if og_video and og_video.get('content'):
+                video_url = clean_url(og_video.get('content'))
+                thumbnail_url = clean_url(og_image.get('content')) if og_image else ""
+                logger.info(f"DdInstagramExtractor: Successfully found video: {video_url}")
+                return {
+                    'title': title,
+                    'thumbnail': thumbnail_url,
+                    'url': video_url,
+                    'ext': 'mp4',
+                    'vcodec': 'h264',
+                    'like_count': like_count
+                }
+            elif og_image and og_image.get('content'):
+                image_url = clean_url(og_image.get('content'))
+                logger.info(f"DdInstagramExtractor: Successfully found image: {image_url}")
+                return {
+                    'title': title,
+                    'thumbnail': image_url,
+                    'url': image_url,
+                    'ext': 'jpg',
+                    'vcodec': 'none',
+                    'like_count': like_count
+                }
+                
+            raise Exception("DdInstagramExtractor: No media found in ddinstagram HTML.")
+
 class InstaloaderExtractor(MediaExtractor):
     """Extraction using the official instaloader library (supports cookies.txt)."""
     def __init__(self):
@@ -403,6 +466,7 @@ class MediaService:
             return _cache[url]
             
         extractors = [
+            DdInstagramExtractor(),
             InstaloaderExtractor(),
             YtDlpExtractor(),
             GraphQLScraper(),
