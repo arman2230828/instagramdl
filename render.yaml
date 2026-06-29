@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: instadl-web
+    env: docker
+    region: oregon
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 8000

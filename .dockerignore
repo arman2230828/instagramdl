@@ -1,0 +1,9 @@
+.git
+.env
+__pycache__
+*.pyc
+app/__pycache__
+app/*/__pycache__
+cookies.txt
+venv/
+.venv/

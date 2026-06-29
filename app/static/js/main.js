@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
         errorCard.classList.add('hidden');
 
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/api/process`, {
+            const response = await fetch(`/api/process`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         thumbnailFallback.classList.add('hidden');
                         thumbnailSkeleton.classList.remove('hidden');
                         
-                        const proxiedUrl = `${CONFIG.API_BASE_URL}/api/proxy-image?url=${encodeURIComponent(item.thumbnail_url)}`;
+                        const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(item.thumbnail_url)}`;
                         const img = new Image();
                         img.onload = () => {
                             mediaThumbnail.src = proxiedUrl;
@@ -105,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const safeTitle = encodeURIComponent((data.media_title || 'instadl_media').substring(0, 30).replace(/[^a-zA-Z0-9]/g, '_')) + (itemsToRender.length > 1 ? `_${index+1}` : '');
                         const ext = item.is_video ? 'mp4' : 'jpg';
                         
-                        actionBtn.href = `${CONFIG.API_BASE_URL}/api/proxy-download?url=${encodeURIComponent(item.action_url)}&title=${safeTitle}&ext=${ext}`;
+                        actionBtn.href = `/api/proxy-download?url=${encodeURIComponent(item.action_url)}&title=${safeTitle}&ext=${ext}`;
                         actionBtn.target = '_self'; 
                         actionBtn.removeAttribute('target');
                         actionBtn.removeAttribute('rel');

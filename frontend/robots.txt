@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://instadl.example.com/sitemap.xml

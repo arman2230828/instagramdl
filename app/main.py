@@ -1,7 +1,9 @@
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
-    title="InstaDL API",
+    title="InstaDL Monolith API",
     version="1.0.0",
     docs_url=None,
     redoc_url=None,
@@ -32,18 +34,11 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # -------------------- CORS --------------------
-
+# In production frontend and backend share the same origin, so CORS is mostly for dev
 origins = [
-    "https://instadld-zeav.vercel.app",
-    "https://fastapk.in",
-    "https://www.fastapk.in",
-    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000"
 ]
-
-# Agar custom domain ho to isko bhi add kar dena
-custom_domain = os.getenv("FRONTEND_URL")
-if custom_domain:
-    origins.append(custom_domain)
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,12 +61,30 @@ async def add_security_headers(request: Request, call_next):
 
     return response
 
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Jinja2 Templates
+templates = Jinja2Templates(directory="app/templates")
+
 app.include_router(api.router, prefix="/api", tags=["API"])
+
+@app.get("/")
+async def serve_home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/{page}")
+async def serve_page(request: Request, page: str):
+    valid_pages = ["about", "privacy", "terms", "contact", "dmca"]
+    if page in valid_pages:
+        return templates.TemplateResponse(f"{page}.html", {"request": request})
+    
+    # If not found, return 404 or index
+    raise HTTPException(status_code=404, detail="Page not found")
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception(exc)
-
     return JSONResponse(
         status_code=500,
         content={
