@@ -54,7 +54,6 @@ def parse_cookies_txt(cookie_path: Optional[str]) -> dict:
                 parts = line.strip().split('\t')
                 if len(parts) >= 7:
                     domain = parts[0]
-                    # Target instagram.com cookies
                     if 'instagram.com' in domain:
                         name = parts[5]
                         value = parts[6]
@@ -64,10 +63,139 @@ def parse_cookies_txt(cookie_path: Optional[str]) -> dict:
         logger.error(f"Error parsing cookies.txt: {e}")
     return cookies
 
+def extract_json_from_html(html: str, start_marker: str) -> Optional[dict]:
+    """Helper to extract a JSON object from HTML starting after a specific marker."""
+    start_idx = html.find(start_marker)
+    if start_idx == -1:
+        return None
+    
+    json_start = start_idx + len(start_marker)
+    brace_idx = html.find('{', json_start)
+    if brace_idx == -1:
+        return None
+        
+    brace_count = 0
+    for i in range(brace_idx, len(html)):
+        char = html[i]
+        if char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                json_str = html[brace_idx:i+1]
+                try:
+                    return json.loads(json_str)
+                except Exception:
+                    return None
+    return None
+
 class MediaExtractor:
     """Base class for extractors."""
     async def extract(self, url: str) -> dict:
         raise NotImplementedError
+
+class InstagramEmbedScraper(MediaExtractor):
+    """Extraction using Instagram's public embed page (no login required)."""
+    async def extract(self, url: str) -> dict:
+        match = re.search(r'/(?:p|reel|tv)/([A-Za-z0-9_-]+)', url)
+        if not match:
+            raise Exception("Could not parse shortcode from URL")
+        shortcode = match.group(1)
+        
+        embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
+        logger.info(f"InstagramEmbedScraper: Fetching embed page: {embed_url}")
+        
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            resp = await client.get(embed_url, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
+            
+            # Try to extract the embedded shortcode_media JSON
+            media = extract_json_from_html(html, '"shortcode_media"')
+            if media:
+                logger.info("InstagramEmbedScraper: Successfully extracted shortcode_media JSON from embed page")
+                # Handle Carousel
+                if 'edge_sidecar_to_children' in media:
+                    entries = []
+                    for edge in media['edge_sidecar_to_children']['edges']:
+                        node = edge['node']
+                        entry_url = node.get('video_url') or node.get('display_url')
+                        entries.append({
+                            'url': entry_url,
+                            'thumbnail': node.get('display_url'),
+                            'vcodec': 'h264' if node.get('is_video') else 'none',
+                            'ext': 'mp4' if node.get('is_video') else 'jpg'
+                        })
+                    return {
+                        'title': media.get('title') or 'Instagram Media',
+                        'entries': entries
+                    }
+                else:
+                    vid_url = media.get('video_url')
+                    if vid_url:
+                        return {
+                            'title': media.get('title') or 'Instagram Media',
+                            'thumbnail': media.get('display_url', ''),
+                            'url': vid_url,
+                            'ext': 'mp4',
+                            'vcodec': 'h264'
+                        }
+                    else:
+                        return {
+                            'title': media.get('title') or 'Instagram Media',
+                            'thumbnail': media.get('display_url', ''),
+                            'url': media.get('display_url', ''),
+                            'ext': 'jpg',
+                            'vcodec': 'none'
+                        }
+            
+            # Fallback 1: Search for raw video_url or display_url in JavaScript strings
+            video_url_match = re.search(r'"video_url"\s*:\s*"([^"]+)"', html)
+            display_url_match = re.search(r'"display_url"\s*:\s*"([^"]+)"', html)
+            
+            if video_url_match:
+                video_url = video_url_match.group(1).replace('\\u0026', '&')
+                thumbnail = display_url_match.group(1).replace('\\u0026', '&') if display_url_match else ""
+                logger.info("InstagramEmbedScraper: Found video_url in raw JS strings")
+                return {
+                    'title': 'Instagram Video',
+                    'thumbnail': thumbnail,
+                    'url': video_url,
+                    'ext': 'mp4',
+                    'vcodec': 'h264'
+                }
+                
+            # Fallback 2: Parse using BeautifulSoup
+            soup = BeautifulSoup(html, 'html.parser')
+            video_tag = soup.find('video')
+            if video_tag and video_tag.get('src'):
+                logger.info("InstagramEmbedScraper: Found video tag in HTML")
+                return {
+                    'title': 'Instagram Video',
+                    'thumbnail': video_tag.get('poster', ''),
+                    'url': video_tag.get('src'),
+                    'ext': 'mp4',
+                    'vcodec': 'h264'
+                }
+                
+            img_tag = soup.find('img', class_='EmbeddedMediaImage') or soup.find('img')
+            if img_tag and img_tag.get('src'):
+                logger.info("InstagramEmbedScraper: Found img tag in HTML")
+                return {
+                    'title': 'Instagram Photo',
+                    'thumbnail': img_tag.get('src'),
+                    'url': img_tag.get('src'),
+                    'ext': 'jpg',
+                    'vcodec': 'none'
+                }
+                
+            raise Exception("Embed Scraper could not find any media content on the page.")
 
 class YtDlpExtractor(MediaExtractor):
     """Extraction using yt-dlp."""
@@ -101,7 +229,6 @@ class YtDlpExtractor(MediaExtractor):
 class GraphQLScraper(MediaExtractor):
     """Extraction using Instagram's ?__a=1&__d=dis endpoint."""
     async def extract(self, url: str) -> dict:
-        # Ensure trailing slash for the API endpoint
         base_url = url.split('?')[0].rstrip('/') + '/'
         api_url = f"{base_url}?__a=1&__d=dis"
         
@@ -127,10 +254,8 @@ class GraphQLScraper(MediaExtractor):
             except ValueError:
                 raise Exception("GraphQL Scraper failed: response is not JSON")
             
-            # 1. Handle modern {"items": [...]} structure
             if 'items' in data and len(data['items']) > 0:
                 item = data['items'][0]
-                # Carousel/Slideshow post
                 if 'carousel_media' in item:
                     entries = []
                     for sub_item in item['carousel_media']:
@@ -157,11 +282,9 @@ class GraphQLScraper(MediaExtractor):
                         'vcodec': 'h264' if is_vid else 'none'
                     }
             
-            # 2. Handle legacy {"graphql": {"shortcode_media": ...}} structure
             elif 'graphql' in data and 'shortcode_media' in data['graphql']:
                 media = data['graphql']['shortcode_media']
                 
-                # Check if it's a carousel (multiple images/videos)
                 if 'edge_sidecar_to_children' in media:
                     entries = []
                     for edge in media['edge_sidecar_to_children']['edges']:
@@ -221,7 +344,6 @@ class HtmlFallbackExtractor(MediaExtractor):
             resp.raise_for_status()
             html = resp.text
             
-            # Try to parse Open Graph tags
             soup = BeautifulSoup(html, 'html.parser')
             og_video = soup.find('meta', property='og:video')
             og_image = soup.find('meta', property='og:image')
@@ -236,7 +358,6 @@ class HtmlFallbackExtractor(MediaExtractor):
                     'vcodec': 'h264'
                 }
             
-            # If no OG video, look for raw JSON blobs
             json_pattern = re.compile(r'window\._sharedData\s*=\s*({.+?});</script>')
             match = json_pattern.search(html)
             if match:
@@ -264,17 +385,15 @@ class MediaService:
     
     @staticmethod
     def _normalize_info(info_dict: dict) -> Tuple[str, str, str, List[MediaItem]]:
-        """Extracts standard fields from a raw info dictionary (either from yt-dlp or custom scrapers)."""
+        """Extracts standard fields from a raw info dictionary."""
         items = []
         media_title = info_dict.get('title') or info_dict.get('description') or 'Instagram Media'
-        # Limit title length
         if len(media_title) > 100:
             media_title = media_title[:97] + "..."
             
         thumbnail_url = info_dict.get('thumbnail') or info_dict.get('thumbnails', [{}])[0].get('url') or ''
         action_url = info_dict.get('url')
         
-        # If the post is a carousel/playlist, extract all entries
         if 'entries' in info_dict and info_dict['entries']:
             for entry in info_dict['entries']:
                 if not entry:
@@ -292,7 +411,6 @@ class MediaService:
                 action_url = action_url or items[0].action_url
         else:
             if not action_url and 'formats' in info_dict and info_dict['formats']:
-                # Find the best format
                 formats = [f for f in info_dict['formats'] if f.get('url')]
                 if formats:
                     action_url = formats[-1].get('url', '#')
@@ -306,22 +424,20 @@ class MediaService:
 
     @staticmethod
     async def process_url(url: str, mode: str = "reel") -> ProcessResponse:
-        # Normalize and clean the URL
         url = url.strip()
         if "instagram.com" in url:
-            # Remove query parameters and ensure trailing slash
             base_url = url.split('?')[0]
             url = base_url.rstrip('/') + '/'
             
         logger.info(f"Processing normalized URL: {url} (mode: {mode})")
         
-        # Check cache
         if url in _cache:
             logger.info(f"Cache hit for {url}")
             return _cache[url]
             
-        # Define extraction strategies in order of preference
+        # Prioritize InstagramEmbedScraper as it is fast and does not require login or cookies
         extractors = [
+            InstagramEmbedScraper(),
             YtDlpExtractor(),
             GraphQLScraper(),
             HtmlFallbackExtractor()
@@ -371,7 +487,6 @@ class MediaService:
                 timestamp=timestamp_str
             )
             
-            # Save to cache
             _cache[url] = response
             return response
             
