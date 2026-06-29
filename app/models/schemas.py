@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
 class ProcessRequest(BaseModel):
     url: str
@@ -15,5 +15,6 @@ class ProcessResponse(BaseModel):
     media_title: str | None = None
     thumbnail_url: str | None = None
     action_url: str | None = None
+    like_count: int | None = None
     items: list[MediaItem] = []
     timestamp: str | None = None

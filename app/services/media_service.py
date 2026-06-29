@@ -63,6 +63,14 @@ def parse_cookies_txt(cookie_path: Optional[str]) -> dict:
         logger.error(f"Error parsing cookies.txt: {e}")
     return cookies
 
+def clean_url(url: str) -> str:
+    """Decodes escaped slashes and unicode characters in URLs."""
+    if not url:
+        return ""
+    url = url.replace('\\/', '/')
+    url = url.replace('\\u0026', '&')
+    return url
+
 def extract_json_from_html(html: str, start_marker: str) -> Optional[dict]:
     """Helper to extract a JSON object from HTML starting after a specific marker."""
     start_idx = html.find(start_marker)
@@ -120,68 +128,89 @@ class InstagramEmbedScraper(MediaExtractor):
             media = extract_json_from_html(html, '"shortcode_media"')
             if media:
                 logger.info("InstagramEmbedScraper: Successfully extracted shortcode_media JSON from embed page")
+                
+                # Get likes count
+                like_count = media.get('edge_liked_by', {}).get('count') or media.get('edge_media_preview_like', {}).get('count')
+                
                 # Handle Carousel
                 if 'edge_sidecar_to_children' in media:
                     entries = []
                     for edge in media['edge_sidecar_to_children']['edges']:
                         node = edge['node']
-                        entry_url = node.get('video_url') or node.get('display_url')
+                        entry_url = clean_url(node.get('video_url') or node.get('display_url'))
                         entries.append({
                             'url': entry_url,
-                            'thumbnail': node.get('display_url'),
+                            'thumbnail': clean_url(node.get('display_url')),
                             'vcodec': 'h264' if node.get('is_video') else 'none',
                             'ext': 'mp4' if node.get('is_video') else 'jpg'
                         })
                     return {
                         'title': media.get('title') or 'Instagram Media',
-                        'entries': entries
+                        'entries': entries,
+                        'like_count': like_count
                     }
                 else:
                     vid_url = media.get('video_url')
                     if vid_url:
                         return {
                             'title': media.get('title') or 'Instagram Media',
-                            'thumbnail': media.get('display_url', ''),
-                            'url': vid_url,
+                            'thumbnail': clean_url(media.get('display_url', '')),
+                            'url': clean_url(vid_url),
                             'ext': 'mp4',
-                            'vcodec': 'h264'
+                            'vcodec': 'h264',
+                            'like_count': like_count
                         }
                     else:
+                        # If the post is a Reel or Video, but we did not find a video URL, do NOT return an image.
+                        # Fail here so we fall back to other extractors (like yt-dlp).
+                        if "/reel/" in url or "/tv/" in url or media.get('is_video'):
+                            raise Exception("InstagramEmbedScraper: Video URL not found in JSON for a video post.")
+                            
                         return {
                             'title': media.get('title') or 'Instagram Media',
-                            'thumbnail': media.get('display_url', ''),
-                            'url': media.get('display_url', ''),
+                            'thumbnail': clean_url(media.get('display_url', '')),
+                            'url': clean_url(media.get('display_url', '')),
                             'ext': 'jpg',
-                            'vcodec': 'none'
+                            'vcodec': 'none',
+                            'like_count': like_count
                         }
             
             # Fallback 1: Search for raw video_url or display_url in JavaScript strings
             video_url_match = re.search(r'"video_url"\s*:\s*"([^"]+)"', html)
             display_url_match = re.search(r'"display_url"\s*:\s*"([^"]+)"', html)
+            likes_match = re.search(r'"edge_liked_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)', html)
+            
+            like_count = int(likes_match.group(1)) if likes_match else None
             
             if video_url_match:
-                video_url = video_url_match.group(1).replace('\\u0026', '&')
-                thumbnail = display_url_match.group(1).replace('\\u0026', '&') if display_url_match else ""
+                video_url = clean_url(video_url_match.group(1))
+                thumbnail = clean_url(display_url_match.group(1)) if display_url_match else ""
                 logger.info("InstagramEmbedScraper: Found video_url in raw JS strings")
                 return {
                     'title': 'Instagram Video',
                     'thumbnail': thumbnail,
                     'url': video_url,
                     'ext': 'mp4',
-                    'vcodec': 'h264'
+                    'vcodec': 'h264',
+                    'like_count': like_count
                 }
                 
-            # Fallback 2: Parse using BeautifulSoup
+            # If it's a Reel/Video and we haven't found a video URL yet, raise an Exception to trigger fallback
+            if "/reel/" in url or "/tv/" in url:
+                raise Exception("InstagramEmbedScraper: Video URL not found in HTML/JS strings for Reel.")
+                
+            # Fallback 2: Parse using BeautifulSoup (only for photos or general posts)
             soup = BeautifulSoup(html, 'html.parser')
             video_tag = soup.find('video')
             if video_tag and video_tag.get('src'):
                 logger.info("InstagramEmbedScraper: Found video tag in HTML")
                 return {
                     'title': 'Instagram Video',
-                    'thumbnail': video_tag.get('poster', ''),
-                    'url': video_tag.get('src'),
+                    'thumbnail': clean_url(video_tag.get('poster', '')),
+                    'url': clean_url(video_tag.get('src')),
                     'ext': 'mp4',
-                    'vcodec': 'h264'
+                    'vcodec': 'h264',
+                    'like_count': like_count
                 }
                 
             img_tag = soup.find('img', class_='EmbeddedMediaImage') or soup.find('img')
@@ -189,10 +218,11 @@ class InstagramEmbedScraper(MediaExtractor):
                 logger.info("InstagramEmbedScraper: Found img tag in HTML")
                 return {
                     'title': 'Instagram Photo',
-                    'thumbnail': img_tag.get('src'),
-                    'url': img_tag.get('src'),
+                    'thumbnail': clean_url(img_tag.get('src')),
+                    'url': clean_url(img_tag.get('src')),
                     'ext': 'jpg',
-                    'vcodec': 'none'
+                    'vcodec': 'none',
+                    'like_count': like_count
                 }
                 
             raise Exception("Embed Scraper could not find any media content on the page.")
@@ -256,67 +286,75 @@ class GraphQLScraper(MediaExtractor):
             
             if 'items' in data and len(data['items']) > 0:
                 item = data['items'][0]
+                like_count = item.get('like_count')
+                
                 if 'carousel_media' in item:
                     entries = []
                     for sub_item in item['carousel_media']:
                         is_vid = 'video_versions' in sub_item
-                        entry_url = sub_item['video_versions'][0]['url'] if is_vid else sub_item['image_versions2']['candidates'][0]['url']
+                        entry_url = clean_url(sub_item['video_versions'][0]['url'] if is_vid else sub_item['image_versions2']['candidates'][0]['url'])
                         entries.append({
                             'url': entry_url,
-                            'thumbnail': sub_item['image_versions2']['candidates'][0]['url'],
+                            'thumbnail': clean_url(sub_item['image_versions2']['candidates'][0]['url']),
                             'vcodec': 'h264' if is_vid else 'none',
                             'ext': 'mp4' if is_vid else 'jpg'
                         })
                     return {
                         'title': item.get('caption', {}).get('text', 'Instagram Media') if item.get('caption') else 'Instagram Media',
-                        'entries': entries
+                        'entries': entries,
+                        'like_count': like_count
                     }
                 else:
                     is_vid = 'video_versions' in item
-                    media_url = item['video_versions'][0]['url'] if is_vid else item['image_versions2']['candidates'][0]['url']
+                    media_url = clean_url(item['video_versions'][0]['url'] if is_vid else item['image_versions2']['candidates'][0]['url'])
                     return {
                         'title': item.get('caption', {}).get('text', 'Instagram Media') if item.get('caption') else 'Instagram Media',
-                        'thumbnail': item['image_versions2']['candidates'][0]['url'],
+                        'thumbnail': clean_url(item['image_versions2']['candidates'][0]['url']),
                         'url': media_url,
                         'ext': 'mp4' if is_vid else 'jpg',
-                        'vcodec': 'h264' if is_vid else 'none'
+                        'vcodec': 'h264' if is_vid else 'none',
+                        'like_count': like_count
                     }
             
             elif 'graphql' in data and 'shortcode_media' in data['graphql']:
                 media = data['graphql']['shortcode_media']
+                like_count = media.get('edge_liked_by', {}).get('count') or media.get('edge_media_preview_like', {}).get('count')
                 
                 if 'edge_sidecar_to_children' in media:
                     entries = []
                     for edge in media['edge_sidecar_to_children']['edges']:
                         node = edge['node']
-                        entry_url = node.get('video_url') or node.get('display_url')
+                        entry_url = clean_url(node.get('video_url') or node.get('display_url'))
                         entries.append({
                             'url': entry_url,
-                            'thumbnail': node.get('display_url'),
+                            'thumbnail': clean_url(node.get('display_url')),
                             'vcodec': 'h264' if node.get('is_video') else 'none',
                             'ext': 'mp4' if node.get('is_video') else 'jpg'
                         })
                     return {
                         'title': media.get('title') or 'Instagram Media',
-                        'entries': entries
+                        'entries': entries,
+                        'like_count': like_count
                     }
                 else:
                     vid_url = media.get('video_url')
                     if vid_url:
                         return {
                             'title': media.get('title') or 'Instagram Media',
-                            'thumbnail': media.get('display_url', ''),
-                            'url': vid_url,
+                            'thumbnail': clean_url(media.get('display_url', '')),
+                            'url': clean_url(vid_url),
                             'ext': 'mp4',
-                            'vcodec': 'h264'
+                            'vcodec': 'h264',
+                            'like_count': like_count
                         }
                     else:
                         return {
                             'title': media.get('title') or 'Instagram Media',
-                            'thumbnail': media.get('display_url', ''),
-                            'url': media.get('display_url', ''),
+                            'thumbnail': clean_url(media.get('display_url', '')),
+                            'url': clean_url(media.get('display_url', '')),
                             'ext': 'jpg',
-                            'vcodec': 'none'
+                            'vcodec': 'none',
+                            'like_count': like_count
                         }
             
             raise Exception("GraphQL Scraper failed to find media in JSON structure.")
@@ -352,8 +390,8 @@ class HtmlFallbackExtractor(MediaExtractor):
             if og_video and og_video.get('content'):
                 return {
                     'title': og_title.get('content') if og_title else 'Instagram Media',
-                    'thumbnail': og_image.get('content') if og_image else '',
-                    'url': og_video.get('content'),
+                    'thumbnail': clean_url(og_image.get('content') if og_image else ''),
+                    'url': clean_url(og_video.get('content')),
                     'ext': 'mp4',
                     'vcodec': 'h264'
                 }
@@ -368,8 +406,8 @@ class HtmlFallbackExtractor(MediaExtractor):
                     if vid_url:
                         return {
                             'title': 'Instagram Media',
-                            'thumbnail': post_data.get('display_url', ''),
-                            'url': vid_url,
+                            'thumbnail': clean_url(post_data.get('display_url', '')),
+                            'url': clean_url(vid_url),
                             'ext': 'mp4',
                             'vcodec': 'h264'
                         }
@@ -391,17 +429,17 @@ class MediaService:
         if len(media_title) > 100:
             media_title = media_title[:97] + "..."
             
-        thumbnail_url = info_dict.get('thumbnail') or info_dict.get('thumbnails', [{}])[0].get('url') or ''
-        action_url = info_dict.get('url')
+        thumbnail_url = clean_url(info_dict.get('thumbnail') or info_dict.get('thumbnails', [{}])[0].get('url') or '')
+        action_url = clean_url(info_dict.get('url'))
         
         if 'entries' in info_dict and info_dict['entries']:
             for entry in info_dict['entries']:
                 if not entry:
                     continue
-                entry_thumb = entry.get('thumbnail') or entry.get('thumbnails', [{}])[0].get('url') or ''
-                entry_url = entry.get('url')
+                entry_thumb = clean_url(entry.get('thumbnail') or entry.get('thumbnails', [{}])[0].get('url') or '')
+                entry_url = clean_url(entry.get('url'))
                 if not entry_url and 'formats' in entry and entry['formats']:
-                    entry_url = entry['formats'][-1].get('url', '#')
+                    entry_url = clean_url(entry['formats'][-1].get('url', '#'))
                 
                 is_vid = entry.get('vcodec') != 'none' or (entry.get('ext') in ['mp4', 'webm'])
                 items.append(MediaItem(thumbnail_url=entry_thumb, action_url=entry_url, is_video=is_vid))
@@ -413,7 +451,7 @@ class MediaService:
             if not action_url and 'formats' in info_dict and info_dict['formats']:
                 formats = [f for f in info_dict['formats'] if f.get('url')]
                 if formats:
-                    action_url = formats[-1].get('url', '#')
+                    action_url = clean_url(formats[-1].get('url', '#'))
             elif not action_url:
                 action_url = '#'
             
@@ -435,7 +473,6 @@ class MediaService:
             logger.info(f"Cache hit for {url}")
             return _cache[url]
             
-        # Prioritize InstagramEmbedScraper as it is fast and does not require login or cookies
         extractors = [
             InstagramEmbedScraper(),
             YtDlpExtractor(),
@@ -483,6 +520,7 @@ class MediaService:
                 media_title=media_title,
                 thumbnail_url=thumbnail_url,
                 action_url=action_url,
+                like_count=info_dict.get('like_count'),
                 items=items,
                 timestamp=timestamp_str
             )

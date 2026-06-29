@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const mediaTitle = document.getElementById('mediaTitle');
     const processTime = document.getElementById('processTime');
+    const likesCount = document.getElementById('likesCount');
     const errorMsg = document.getElementById('errorMsg');
     const retryBtn = document.getElementById('retryBtn');
 
@@ -51,6 +52,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.timestamp) {
                     const date = new Date(data.timestamp);
                     processTime.textContent = `Processed on: ${date.toLocaleString()}`;
+                }
+                
+                if (likesCount) {
+                    likesCount.textContent = data.like_count ? `❤️ ${typeof data.like_count === 'number' ? data.like_count.toLocaleString() : data.like_count} likes` : '';
                 }
 
                 const carouselContainer = document.getElementById('carouselContainer');
@@ -110,7 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         actionBtn.removeAttribute('target');
                         actionBtn.removeAttribute('rel');
                         actionBtn.setAttribute('download', 'media');
-                        actionBtn.textContent = `Download ${item.is_video ? 'Video' : 'Image'}`;
+                        actionBtn.textContent = 'Download';
                     } else {
                         actionBtn.classList.add('hidden');
                     }
