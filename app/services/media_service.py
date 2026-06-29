@@ -129,7 +129,6 @@ class InstagramEmbedScraper(MediaExtractor):
             if media:
                 logger.info("InstagramEmbedScraper: Successfully extracted shortcode_media JSON from embed page")
                 
-                # Get likes count
                 like_count = media.get('edge_liked_by', {}).get('count') or media.get('edge_media_preview_like', {}).get('count')
                 
                 # Handle Carousel
@@ -161,8 +160,6 @@ class InstagramEmbedScraper(MediaExtractor):
                             'like_count': like_count
                         }
                     else:
-                        # If the post is a Reel or Video, but we did not find a video URL, do NOT return an image.
-                        # Fail here so we fall back to other extractors (like yt-dlp).
                         if "/reel/" in url or "/tv/" in url or media.get('is_video'):
                             raise Exception("InstagramEmbedScraper: Video URL not found in JSON for a video post.")
                             
@@ -195,11 +192,10 @@ class InstagramEmbedScraper(MediaExtractor):
                     'like_count': like_count
                 }
                 
-            # If it's a Reel/Video and we haven't found a video URL yet, raise an Exception to trigger fallback
             if "/reel/" in url or "/tv/" in url:
                 raise Exception("InstagramEmbedScraper: Video URL not found in HTML/JS strings for Reel.")
                 
-            # Fallback 2: Parse using BeautifulSoup (only for photos or general posts)
+            # Fallback 2: Parse using BeautifulSoup
             soup = BeautifulSoup(html, 'html.parser')
             video_tag = soup.find('video')
             if video_tag and video_tag.get('src'):
@@ -226,6 +222,72 @@ class InstagramEmbedScraper(MediaExtractor):
                 }
                 
             raise Exception("Embed Scraper could not find any media content on the page.")
+
+class DdInstagramExtractor(MediaExtractor):
+    """Extraction using ddinstagram.com (cookie-free, login-free proxy for embeds)."""
+    async def extract(self, url: str) -> dict:
+        # Normalize and convert URL to ddinstagram.com
+        match = re.search(r'/(?:p|reel|tv)/([A-Za-z0-9_-]+)', url)
+        if not match:
+            raise Exception("Could not parse shortcode from URL")
+        shortcode = match.group(1)
+        dd_url = f"https://ddinstagram.com/images/{shortcode}/1"
+        
+        logger.info(f"DdInstagramExtractor: Fetching proxy page: {dd_url}")
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            resp = await client.get(dd_url, headers=headers)
+            resp.raise_for_status()
+            
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # ddinstagram puts the direct video URL in og:video or twitter:player
+            og_video = soup.find('meta', property='og:video') or soup.find('meta', name='twitter:player:stream') or soup.find('meta', name='twitter:player')
+            og_image = soup.find('meta', property='og:image') or soup.find('meta', name='twitter:image')
+            og_title = soup.find('meta', property='og:title') or soup.find('meta', name='twitter:title')
+            og_description = soup.find('meta', property='og:description') or soup.find('meta', name='twitter:description')
+            
+            title = og_title.get('content') if og_title else 'Instagram Media'
+            desc = og_description.get('content', '') if og_description else ''
+            
+            # Try to parse like count from description (e.g. "❤️ 12,345 | 💬 123")
+            like_count = None
+            likes_match = re.search(r'❤️\s*([\d,]+)', desc)
+            if likes_match:
+                try:
+                    like_count = int(likes_match.group(1).replace(',', ''))
+                except:
+                    pass
+            
+            if og_video and og_video.get('content'):
+                video_url = clean_url(og_video.get('content'))
+                thumbnail_url = clean_url(og_image.get('content')) if og_image else ""
+                logger.info(f"DdInstagramExtractor: Successfully found video: {video_url}")
+                return {
+                    'title': title,
+                    'thumbnail': thumbnail_url,
+                    'url': video_url,
+                    'ext': 'mp4',
+                    'vcodec': 'h264',
+                    'like_count': like_count
+                }
+            elif og_image and og_image.get('content'):
+                image_url = clean_url(og_image.get('content'))
+                logger.info(f"DdInstagramExtractor: Successfully found image: {image_url}")
+                return {
+                    'title': title,
+                    'thumbnail': image_url,
+                    'url': image_url,
+                    'ext': 'jpg',
+                    'vcodec': 'none',
+                    'like_count': like_count
+                }
+                
+            raise Exception("DdInstagramExtractor: No media found in ddinstagram HTML.")
 
 class YtDlpExtractor(MediaExtractor):
     """Extraction using yt-dlp."""
@@ -475,6 +537,7 @@ class MediaService:
             
         extractors = [
             InstagramEmbedScraper(),
+            DdInstagramExtractor(),
             YtDlpExtractor(),
             GraphQLScraper(),
             HtmlFallbackExtractor()
